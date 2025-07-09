@@ -595,6 +595,11 @@ def perform_eda(df_to_analyze):
     st.subheader("Distribuição de Variáveis Numéricas")
     with st.expander("Clique para ver os Histogramas das Variáveis Numéricas"):
         num_cols_auto = df_to_analyze.select_dtypes(include=np.number).columns
+        
+        if len(num_cols_auto) == 0:
+            st.warning("Nenhuma coluna numérica encontrada para análise.")
+            return
+            
         if not num_cols_auto.empty:
             current_cols = st.columns(3)
             for i, col in enumerate(num_cols_auto):
@@ -662,6 +667,7 @@ def perform_eda(df_to_analyze):
     st.subheader("Matriz de Correlação")
     with st.expander("Clique para ver a Matriz de Correlação"):
         num_cols_auto = df_to_analyze.select_dtypes(include=np.number).columns
+        
         if len(num_cols_auto) >= 2:
             col1, col2 = st.columns(2) 
             with col1: 
@@ -685,62 +691,89 @@ def perform_eda(df_to_analyze):
     # Análise de Multicolinearidade (VIF)
     st.subheader("Análise de Multicolinearidade (VIF)")
     with st.expander("Clique para ver a análise de multicolinearidade"):
-        num_cols = df_to_analyze.select_dtypes(include=np.number).columns
-        if len(num_cols) >= 2:
-            # Calcular VIF para cada variável numérica
-            vif_data = pd.DataFrame()
-            vif_data["Variável"] = num_cols
-            vif_data["VIF"] = [variance_inflation_factor(df_to_analyze[num_cols].dropna().values, i) 
-                             for i in range(len(num_cols))]
-            
-            # Criar dicionário de VIF para uso posterior
-            vif_info = dict(zip(vif_data["Variável"], vif_data["VIF"]))
-            
-            # Classificar colunas por VIF
-            vif_data = vif_data.sort_values(by="VIF", ascending=False)
-            
-            # Definir cores baseadas no VIF
-            def color_vif(val):
-                if val > 10:
-                    return 'background-color: #ffcccc'  # Vermelho claro para alta multicolinearidade
-                elif val > 5:
-                    return 'background-color: #fff3cd'  # Amarelo claro para moderada
-                else:
-                    return ''  # Sem cor para baixa
-            
-            st.write("""
-            **Interpretação do VIF (Variance Inflation Factor):**
-            - **VIF < 5**: Multicolinearidade baixa (geralmente aceitável)
-            - **5 ≤ VIF ≤ 10**: Multicolinearidade moderada (pode ser problemática)
-            - **VIF > 10**: Multicolinearidade alta (deve ser tratada)
-            """)
-            
-            # Exibir tabela com cores condicionais
-            col1, col2 = st.columns(2)
-            with col1:
-                st.dataframe(
-                vif_data.style.applymap(color_vif, subset=['VIF'])
-                .format({'VIF': '{:.2f}'})
-                .set_properties(**{'text-align': 'left'})
-            )
-            with col2:
-                st.empty()  # Espaço vazio para balancear
-            
-            
-            # Identificar colunas problemáticas
-            high_vif_cols = vif_data[vif_data["VIF"] > 10]["Variável"].tolist()
-            if high_vif_cols:
-                st.warning(f"⚠️ **Atenção:** As seguintes variáveis apresentam alta multicolinearidade (VIF > 10): {', '.join(high_vif_cols)}")
-                st.info("""
-                **Sugestões para tratar multicolinearidade:**
-                1. Remover uma das variáveis altamente correlacionadas
-                2. Criar uma nova variável combinando as correlacionadas
-                3. Aplicar técnicas de redução de dimensionalidade (PCA)
-                """)
-            else:
-                st.success("✅ Nenhuma variável com multicolinearidade alta (VIF > 10) detectada.")
+        num_cols = df_to_analyze.select_dtypes(include=np.number).columns.tolist()
+        
+        # Verificação robusta para cálculo do VIF
+        if len(num_cols) < 2:
+            st.warning("São necessárias pelo menos duas colunas numéricas para calcular o VIF.")
         else:
-            st.info("São necessárias pelo menos duas colunas numéricas para calcular o VIF.")
+            try:
+                # Pré-processamento mais rigoroso
+                numeric_df = df_to_analyze[num_cols].dropna()
+                
+                # Remove colunas com zero variância ou constantes
+                numeric_df = numeric_df.loc[:, numeric_df.nunique() > 1]
+                numeric_df = numeric_df.loc[:, numeric_df.std() > 0]
+                
+                if len(numeric_df.columns) < 2:
+                    st.warning("Não há colunas numéricas com variação suficiente para cálculo do VIF.")
+                    return
+                
+                # Verificação adicional para garantir dados válidos
+                if numeric_df.empty:
+                    st.warning("Dados numéricos insuficientes após pré-processamento.")
+                    return
+                
+                # Cálculo seguro do VIF com tratamento de erro específico
+                vif_data = pd.DataFrame(columns=["Variável", "VIF"])
+                
+                for i, col in enumerate(numeric_df.columns):
+                    try:
+                        # Calcula VIF para cada coluna individualmente
+                        vif = variance_inflation_factor(numeric_df.values, i)
+                        vif_data.loc[i] = [col, vif]
+                    except Exception as e:
+                        st.warning(f"Não foi possível calcular VIF para {col}: {str(e)}")
+                        continue
+                
+                if not vif_data.empty:
+                    # Ordena por VIF
+                    vif_data = vif_data.sort_values(by="VIF", ascending=False)
+                    
+                    # Formatação condicional
+                    def color_vif(val):
+                        if val > 10:
+                            return 'background-color: #ffcccc'
+                        elif val > 5:
+                            return 'background-color: #fff3cd'
+                        return ''
+                    
+                    st.write("""**Interpretação do VIF (Variance Inflation Factor):**
+                    - **VIF < 5**: Multicolinearidade baixa (geralmente aceitável)
+                    - **5 ≤ VIF ≤ 10**: Multicolinearidade moderada (pode ser problemática)
+                    - **VIF > 10**: Multicolinearidade alta (deve ser tratada)
+                    """)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.dataframe(
+                            vif_data.style.applymap(color_vif, subset=['VIF'])
+                            .format({'VIF': '{:.2f}'})
+                        )
+                        
+                    with col2:
+                        st.empty()  # Espaço vazio para balancear
+                                            
+                    # Verifica multicolinearidade alta
+                    high_vif_cols = vif_data[vif_data["VIF"] > 10]["Variável"].tolist()
+                    if high_vif_cols:
+                        st.warning(f"⚠️ **Atenção:** As seguintes variáveis apresentam alta multicolinearidade (VIF > 10): {', '.join(high_vif_cols)}")
+                        st.info("""**Sugestões para tratar multicolinearidade:**
+                    1. Remover uma das variáveis altamente correlacionadas
+                    2. Criar uma nova variável combinando as correlacionadas
+                    3. Aplicar técnicas de redução de dimensionalidade (PCA)
+                    """)
+                    else:
+                        st.success("✅ Nenhuma variável com multicolinearidade alta (VIF > 10) detectada.")
+                else:
+                    st.info("São necessárias pelo menos duas colunas numéricas para calcular o VIF.")
+                    
+            except Exception as e:
+                st.error(f"Erro ao calcular VIF: {str(e)}")
+                st.error("Recomendações:")
+                st.error("1. Verifique se há colunas com valores constantes")
+                st.error("2. Verifique se há valores NaN/Inf nos dados")
+                st.error("3. Tente reduzir o número de colunas analisadas")
 
     # Análise Fatorial (PCA simplificado)
     st.subheader("Análise Fatorial (Componentes Principais)")
