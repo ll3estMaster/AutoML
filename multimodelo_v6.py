@@ -1577,7 +1577,7 @@ def main():
     
     # ----- 1. Carregamento e Análise dos Dados -----
     st.markdown("## 1. Carregamento e Análise dos Dados")
-    uploaded = st.file_uploader("Carregue seu dataset (CSV ou Excel)", type=['csv', 'xlsx'])
+    uploaded = st.file_uploader("Carregue seu dataset (CSV ou Excel), este arquivo único deverá conter todos os dados (treino e teste) e incluir a coluna alvo.", type=['csv', 'xlsx'])
     
     if uploaded:
         if uploaded.name != st.session_state['uploaded_file_name']:
