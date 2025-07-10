@@ -1803,165 +1803,166 @@ def main():
         st.markdown("---")
         st.markdown("## 4. Seleção de Variáveis Preditoras")
 
-    # Obter colunas disponíveis (excluindo a variável alvo)
-    available_cols = [col for col in st.session_state['df_original'].columns 
-                     if col != st.session_state['y_col']]
+        # Obter colunas disponíveis (excluindo a variável alvo)
+        available_cols = [col for col in st.session_state['df_original'].columns 
+                         if col != st.session_state['y_col']]
 
-    # Obter colunas numéricas (excluindo a variável alvo) - CORREÇÃO AQUI
-    num_cols = [col for col in st.session_state['df_original'].select_dtypes(include=np.number).columns 
-               if col != st.session_state['y_col']]
+        # Obter colunas numéricas (excluindo a variável alvo) - CORREÇÃO AQUI
+        num_cols = [col for col in st.session_state['df_original'].select_dtypes(include=np.number).columns 
+                   if col != st.session_state['y_col']]
 
-    # Inicializar vif_info como dicionário vazio
-    vif_info = {}
+        # Inicializar vif_info como dicionário vazio
+        vif_info = {}
 
-    if len(num_cols) >= 2:
-        # Calcular VIF para cada variável numérica
-        vif_data = pd.DataFrame()
-        vif_data["Variável"] = num_cols
-        vif_data["VIF"] = [variance_inflation_factor(st.session_state['df_original'][num_cols].dropna().values, i) 
-                         for i in range(len(num_cols))]
-        
-        # Criar dicionário de VIF para uso posterior
-        vif_info = dict(zip(vif_data["Variável"], vif_data["VIF"]))
+        if len(num_cols) >= 2:
+            # Calcular VIF para cada variável numérica
+            vif_data = pd.DataFrame()
+            vif_data["Variável"] = num_cols
+            vif_data["VIF"] = [variance_inflation_factor(st.session_state['df_original'][num_cols].dropna().values, i) 
+                             for i in range(len(num_cols))]
+            
+            # Criar dicionário de VIF para uso posterior
+            vif_info = dict(zip(vif_data["Variável"], vif_data["VIF"]))
 
-    # Função para adicionar emojis com base no VIF (se aplicável)
-    def label_with_vif(col):
-        if len(num_cols) >= 2 and col in vif_info:
-            vif = vif_info[col]
-            if vif > 10:
-                return f"🔴 {col}"  # Alta multicolinearidade
-            elif vif > 5:
-                return f"🟠 {col}"  # Moderada
-        return f"⚫ {col}"  # Baixa ou não numérica
+        # Função para adicionar emojis com base no VIF (se aplicável)
+        def label_with_vif(col):
+            if len(num_cols) >= 2 and col in vif_info:
+                vif = vif_info[col]
+                if vif > 10:
+                    return f"🔴 {col}"  # Alta multicolinearidade
+                elif vif > 5:
+                    return f"🟠 {col}"  # Moderada
+            return f"⚫ {col}"  # Baixa ou não numérica
 
-    # Criar mapeamento entre labels com emoji e nomes reais
-    col_labels = {label_with_vif(col): col for col in available_cols}
-    reverse_labels = {v: k for k, v in col_labels.items()}
+        # Criar mapeamento entre labels com emoji e nomes reais
+        col_labels = {label_with_vif(col): col for col in available_cols}
+        reverse_labels = {v: k for k, v in col_labels.items()}
 
-    # Valores default convertidos para labels com emojis
-    default_x_cols = st.session_state.get('x_cols', [])
-    default_x_cols = [col for col in default_x_cols if col in available_cols]
-    default_x_labels = [reverse_labels.get(col, col) for col in default_x_cols]
+        # Valores default convertidos para labels com emojis
+        default_x_cols = st.session_state.get('x_cols', [])
+        default_x_cols = [col for col in default_x_cols if col in available_cols]
+        default_x_labels = [reverse_labels.get(col, col) for col in default_x_cols]
 
-    # Seleção com emojis
-    x_cols_labeled = st.multiselect(
-        "Selecione as colunas preditoras (X)", 
-        options=list(col_labels.keys()),
-        default=default_x_labels,
-        key="x_cols_selector"
-    )
-
-    # Traduzir de volta para nomes reais
-    x_cols_current = [col_labels[label] for label in x_cols_labeled]
-    
-    # Identificar e armazenar colunas categóricas selecionadas
-    selected_cat_cols = [col for col in x_cols_current 
-                        if col in st.session_state['df_original'].select_dtypes(include=['object', 'category']).columns]
-    st.session_state['selected_cat_cols'] = selected_cat_cols
-    
-
-    
-    # Mostrar legenda dos emojis
-    if len(num_cols) >= 2:
-        st.markdown("""
-        **Legenda dos Emojis de Multicolinearidade:**
-        - 🔴 VIF > 10 → Alta multicolinearidade
-        - 🟠 5 < VIF ≤ 10 → Moderada
-        - ⚫ VIF ≤ 5 ou não numérica → Baixa ou irrelevante
-        """)
-    
-    if selected_cat_cols:
-        st.success(f"✅ Colunas categóricas selecionadas: {', '.join(selected_cat_cols)}")
-    else:
-        st.info("ℹ️ Nenhuma coluna categórica foi selecionada como preditora")
-
-    # Se fatores tiverem sido calculados
-    if st.session_state.get('factors_df') is not None:
-        st.markdown("### Opções de Análise Fatorial")
-        use_factors = st.checkbox(
-            "Usar componentes principais (fatores) no lugar das variáveis numéricas originais",
-            value=st.session_state.get('use_factors', False),
-            key="use_factors_checkbox"
+        # Seleção com emojis
+        x_cols_labeled = st.multiselect(
+            "Selecione as colunas preditoras (X)", 
+            options=list(col_labels.keys()),
+            default=default_x_labels,
+            key="x_cols_selector"
         )
-        st.session_state['use_factors'] = use_factors
+
+        # Traduzir de volta para nomes reais
+        x_cols_current = [col_labels[label] for label in x_cols_labeled]
         
-        if use_factors:
-            st.info("ℹ️ Os fatores calculados na análise fatorial serão usados no lugar das variáveis numéricas originais.")
-            st.write("Variáveis de fator disponíveis:", list(st.session_state['factors_df'].columns))
+        # Identificar e armazenar colunas categóricas selecionadas
+        selected_cat_cols = [col for col in x_cols_current 
+                            if col in st.session_state['df_original'].select_dtypes(include=['object', 'category']).columns]
+        st.session_state['selected_cat_cols'] = selected_cat_cols
+        
+
+        
+        # Mostrar legenda dos emojis
+        if len(num_cols) >= 2:
+            st.markdown("""
+            **Legenda dos Emojis de Multicolinearidade:**
+            - 🔴 VIF > 10 → Alta multicolinearidade
+            - 🟠 5 < VIF ≤ 10 → Moderada
+            - ⚫ VIF ≤ 5 ou não numérica → Baixa ou irrelevante
+            """)
+        
+        if selected_cat_cols:
+            st.success(f"✅ Colunas categóricas selecionadas: {', '.join(selected_cat_cols)}")
         else:
-            st.info("ℹ️ As variáveis originais serão usadas para modelagem.")
+            st.info("ℹ️ Nenhuma coluna categórica foi selecionada como preditora")
 
-    # Atualizar sessão se houve mudança nas variáveis preditoras
-    if x_cols_current != st.session_state['x_cols']:
-        st.session_state['x_cols'] = x_cols_current
-        st.session_state['data_preprocessed'] = False
-        st.rerun()
-    
-    
-    # Processar dados
-    if st.session_state['x_cols'] and st.session_state['y_col']:
-        df_temp = st.session_state['df_original'].copy() 
-        df_limpo, nans_present = prepare_data(df_temp, st.session_state['x_cols'], st.session_state['y_col'])
-        st.session_state['df_trabalho'] = df_limpo
-        st.session_state['nans_present_in_selection'] = nans_present
-        st.session_state['data_preprocessed'] = True
+        # Se fatores tiverem sido calculados
+        if st.session_state.get('factors_df') is not None:
+            st.markdown("### Opções de Análise Fatorial")
+            use_factors = st.checkbox(
+                "Usar componentes principais (fatores) no lugar das variáveis numéricas originais",
+                value=st.session_state.get('use_factors', False),
+                key="use_factors_checkbox"
+            )
+            st.session_state['use_factors'] = use_factors
+            
+            if use_factors:
+                st.info("ℹ️ Os fatores calculados na análise fatorial serão usados no lugar das variáveis numéricas originais.")
+                st.write("Variáveis de fator disponíveis:", list(st.session_state['factors_df'].columns))
+            else:
+                st.info("ℹ️ As variáveis originais serão usadas para modelagem.")
 
-    st.info(f"🔍 Dimensão atual do dataframe de trabalho: **{st.session_state['df_trabalho'].shape[0]} linhas**, **{st.session_state['df_trabalho'].shape[1]} colunas**")
+        # Atualizar sessão se houve mudança nas variáveis preditoras
+        if x_cols_current != st.session_state['x_cols']:
+            st.session_state['x_cols'] = x_cols_current
+            st.session_state['data_preprocessed'] = False
+            st.rerun()
+        
+        
+        # Processar dados
+        if st.session_state['x_cols'] and st.session_state['y_col']:
+            df_temp = st.session_state['df_original'].copy() 
+            df_limpo, nans_present = prepare_data(df_temp, st.session_state['x_cols'], st.session_state['y_col'])
+            st.session_state['df_trabalho'] = df_limpo
+            st.session_state['nans_present_in_selection'] = nans_present
+            st.session_state['data_preprocessed'] = True
+
+        st.info(f"🔍 Dimensão atual do dataframe de trabalho: **{st.session_state['df_trabalho'].shape[0]} linhas**, **{st.session_state['df_trabalho'].shape[1]} colunas**")
 
     # ----- 5. Configuração de Classes (apenas classificação) -----
-    if st.session_state.get('problem_type') == 'classification':
-        st.markdown("---")
-        st.markdown("## 5. Configuração de Classes para Curva ROC/AUC (Opcional)")
-        st.info("Para problemas de classificação binária ou multiclasse com binarização, selecione as classes que você considera a **'classe de interesse'** para o cálculo da Curva ROC e AUC.")
+    if st.session_state.get('data_preprocessed'):
+        if st.session_state.get('problem_type') == 'classification':
+            st.markdown("---")
+            st.markdown("## 5. Configuração de Classes para Curva ROC/AUC (Opcional)")
+            st.info("Para problemas de classificação binária ou multiclasse com binarização, selecione as classes que você considera a **'classe de interesse'** para o cálculo da Curva ROC e AUC.")
 
-        if st.session_state['y_col'] and st.session_state['y_col'] in st.session_state['df_trabalho'].columns:
-            y_value_counts = st.session_state['df_trabalho'][st.session_state['y_col']].value_counts().sort_index()
-            y_unique_values_with_counts = [f"{label} - {count}" for label, count in y_value_counts.items()]
+            if st.session_state['y_col'] and st.session_state['y_col'] in st.session_state['df_trabalho'].columns:
+                y_value_counts = st.session_state['df_trabalho'][st.session_state['y_col']].value_counts().sort_index()
+                y_unique_values_with_counts = [f"{label} - {count}" for label, count in y_value_counts.items()]
 
-            st.session_state['y_original_labels'] = y_value_counts.index.tolist()
+                st.session_state['y_original_labels'] = y_value_counts.index.tolist()
 
-            if len(y_value_counts) > 0:
-                le = LabelEncoder()
-                le.fit(st.session_state['df_trabalho'][st.session_state['y_col']])
-                st.session_state['y_numeric_mapping'] = dict(zip(le.classes_, le.transform(le.classes_)))
+                if len(y_value_counts) > 0:
+                    le = LabelEncoder()
+                    le.fit(st.session_state['df_trabalho'][st.session_state['y_col']])
+                    st.session_state['y_numeric_mapping'] = dict(zip(le.classes_, le.transform(le.classes_)))
 
-            if len(st.session_state['y_original_labels']) > 1:
-                display_to_original_map = {f"{label} - {count}": label for label, count in y_value_counts.items()}
-                current_interest_classes_original = st.session_state.get('interest_classes_selected', []) 
-                valid_current_interest_classes_display = [ 
-                    f"{label} - {y_value_counts.get(label, 0)}" 
-                    for label in current_interest_classes_original 
-                    if label in y_value_counts.index
-                ]
+                if len(st.session_state['y_original_labels']) > 1:
+                    display_to_original_map = {f"{label} - {count}": label for label, count in y_value_counts.items()}
+                    current_interest_classes_original = st.session_state.get('interest_classes_selected', []) 
+                    valid_current_interest_classes_display = [ 
+                        f"{label} - {y_value_counts.get(label, 0)}" 
+                        for label in current_interest_classes_original 
+                        if label in y_value_counts.index
+                    ]
 
-                selected_display_names = st.multiselect(
-                    "Selecione as classes que representam a **'classe de interesse'** para a AUC:", 
-                    options=y_unique_values_with_counts,
-                    default=valid_current_interest_classes_display,
-                    key="interest_classes_selection" 
-                )
-                
-                st.session_state['interest_classes_selected'] = [ 
-                    display_to_original_map[display_name] for display_name in selected_display_names
-                ]
-                
-                if not st.session_state['interest_classes_selected']: 
-                    st.warning("⚠️ **Nenhuma 'classe de interesse' selecionada.** A AUC não será calculada/plotada para problemas multiclasse.")
-                elif len(st.session_state['interest_classes_selected']) == len(st.session_state['y_original_labels']): 
-                    st.warning("⚠️ **Todas as classes foram selecionadas como 'classe de interesse'.** Isso fará com que a binarização para AUC seja trivial.")
-                
-                if len(st.session_state['y_original_labels']) == 2 or len(st.session_state['interest_classes_selected']) > 0:
-                    st.session_state['threshold_metric'] = st.selectbox(
-                        "Escolha a métrica para determinar o limiar de corte ótimo:",
-                        options=["Acurácia", "F1-Score", "Precisão", "Recall"],
-                        index=["Acurácia", "F1-Score", "Precisão", "Recall"].index(st.session_state['threshold_metric']),
-                        key="threshold_metric_selector"
+                    selected_display_names = st.multiselect(
+                        "Selecione as classes que representam a **'classe de interesse'** para a AUC:", 
+                        options=y_unique_values_with_counts,
+                        default=valid_current_interest_classes_display,
+                        key="interest_classes_selection" 
                     )
+                    
+                    st.session_state['interest_classes_selected'] = [ 
+                        display_to_original_map[display_name] for display_name in selected_display_names
+                    ]
+                    
+                    if not st.session_state['interest_classes_selected']: 
+                        st.warning("⚠️ **Nenhuma 'classe de interesse' selecionada.** A AUC não será calculada/plotada para problemas multiclasse.")
+                    elif len(st.session_state['interest_classes_selected']) == len(st.session_state['y_original_labels']): 
+                        st.warning("⚠️ **Todas as classes foram selecionadas como 'classe de interesse'.** Isso fará com que a binarização para AUC seja trivial.")
+                    
+                    if len(st.session_state['y_original_labels']) == 2 or len(st.session_state['interest_classes_selected']) > 0:
+                        st.session_state['threshold_metric'] = st.selectbox(
+                            "Escolha a métrica para determinar o limiar de corte ótimo:",
+                            options=["Acurácia", "F1-Score", "Precisão", "Recall"],
+                            index=["Acurácia", "F1-Score", "Precisão", "Recall"].index(st.session_state['threshold_metric']),
+                            key="threshold_metric_selector"
+                        )
+                else:
+                    st.info("A variável alvo tem apenas uma classe única. A curva ROC não é aplicável.")
+                    st.session_state['interest_classes_selected'] = [] 
             else:
-                st.info("A variável alvo tem apenas uma classe única. A curva ROC não é aplicável.")
-                st.session_state['interest_classes_selected'] = [] 
-        else:
-            st.info("Selecione a variável alvo (y) na etapa anterior para configurar as classes.")
+                st.info("Selecione a variável alvo (y) na etapa anterior para configurar as classes.")
 
     # ----- 6. Escolha de Modelos e Hiperparâmetros -----
     
