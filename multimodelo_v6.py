@@ -1019,7 +1019,7 @@ def load_data(uploaded):
         # Configurações de importação
         col1, col2 = st.columns(2)
         with col1:
-            # Detecção automática do delimitador (usando latin1 como fallback)
+            # Detecção automática do delimitador
             try:
                 raw_text = uploaded.getvalue().decode('latin1')
                 first_lines = raw_text.split('\n')[:5]
@@ -1043,15 +1043,29 @@ def load_data(uploaded):
                     }[x],
                     index=[',', ';', '\t', '|'].index(default_delim)
                 )
+                
+                # Adicionando configuração de separador decimal
+                decimal_sep = st.selectbox(
+                    "Separador decimal:",
+                    options=[',', '.'],
+                    index=0)
+                
             except:
                 delimiter = ';'  # Fallback seguro
+                decimal_sep = ',' # Fallback para formato brasileiro
         
         with col2:
             encoding = st.selectbox(
                 "Codificação do arquivo:",
-                options=['latin1', 'iso-8859-1', 'cp1252', 'utf-8'],  # Latin1 primeiro
-                index=0
-            )
+                options=['latin1', 'iso-8859-1', 'cp1252', 'utf-8'],
+                index=0)
+            
+            # Adicionando configuração de separador de milhar
+            thousand_sep = st.selectbox(
+                "Separador de milhar:",
+                options=['.', ',', ''],
+                format_func=lambda x: 'Nenhum' if x == '' else x,
+                index=0)
         
         # Pré-visualização do conteúdo bruto com a codificação selecionada
         try:
@@ -1075,12 +1089,12 @@ def load_data(uploaded):
             df_preview = pd.read_csv(
                 uploaded,
                 delimiter=delimiter,
-                decimal=',',
-                thousands='.',
-                encoding=encoding,  # Usando a codificação selecionada
+                decimal=decimal_sep,
+                thousands=thousand_sep if thousand_sep != '' else None,
+                encoding=encoding,
                 header=0 if has_header else None,
                 nrows=5,
-                engine='python'  # Engine mais tolerante
+                engine='python'
             )
             
             # Ajuste especial para cabeçalhos deslocados
@@ -1089,10 +1103,10 @@ def load_data(uploaded):
                 df_preview = pd.read_csv(
                     uploaded,
                     delimiter=delimiter,
-                    decimal=',',
-                    thousands='.',
+                    decimal=decimal_sep,
+                    thousands=thousand_sep if thousand_sep != '' else None,
                     encoding=encoding,
-                    header=None,
+                    header=0 if has_header else None,
                     nrows=5,
                     engine='python'
                 )
@@ -1117,8 +1131,8 @@ def load_data(uploaded):
                 df_original = pd.read_csv(
                     uploaded,
                     delimiter=delimiter,
-                    decimal=',',
-                    thousands='.',
+                    decimal=decimal_sep,
+                    thousands=thousand_sep if thousand_sep != '' else None,
                     encoding=encoding,
                     header=0 if has_header else None,
                     engine='python'
