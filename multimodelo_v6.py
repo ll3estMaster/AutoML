@@ -1012,43 +1012,181 @@ def perform_eda(df_to_analyze):
 # =============================================
 def load_data(uploaded):
     df_original = None
+    
     if uploaded.name.endswith('.csv'):
-        df_original = pd.read_csv(uploaded)
-        st.success(f"✅ Arquivo '{uploaded.name}' carregado com sucesso!")
-    elif uploaded.name.endswith('.xlsx'):
-        xls = pd.ExcelFile(uploaded)
-        st.markdown("#### Abas encontradas no arquivo:")
-        for name in xls.sheet_names:
-            st.write(f"- {name}")
+        st.markdown("#### Pré-visualização e Configurações do CSV")
         
-        default_sheet_index = 0
-        if st.session_state['excel_sheet_name'] in xls.sheet_names:
-            default_sheet_index = xls.sheet_names.index(st.session_state['excel_sheet_name'])
-
-        selected_sheet_name = st.selectbox(
-            "Selecione a aba do Excel para carregar", 
-            xls.sheet_names, 
-            index=default_sheet_index, 
-            key="excel_sheet_selector"
-        )
-        st.session_state['excel_sheet_name'] = selected_sheet_name 
-
-        header_row_value = st.number_input(
-            "Número da linha do cabeçalho (começando em 0)", 
-            min_value=0, 
-            value=st.session_state['excel_header_row'], 
-            step=1, 
-            key="excel_header_row_selector"
-        )
-        st.session_state['excel_header_row'] = header_row_value 
-
-        if selected_sheet_name is not None:
+        # Configurações de importação
+        col1, col2 = st.columns(2)
+        with col1:
+            # Detecção automática do delimitador (usando latin1 como fallback)
             try:
-                df_original = pd.read_excel(xls, sheet_name=selected_sheet_name, header=header_row_value)
-                st.success(f"✅ Aba '{selected_sheet_name}' carregada com sucesso! Cabeçalho linha: {header_row_value}")
+                raw_text = uploaded.getvalue().decode('latin1')
+                first_lines = raw_text.split('\n')[:5]
+                
+                probable_delimiters = {',': 0, ';': 0, '\t': 0, '|': 0}
+                for line in first_lines[:5]:
+                    for delim in probable_delimiters:
+                        probable_delimiters[delim] += line.count(delim)
+                
+                sorted_delimiters = sorted(probable_delimiters.items(), key=lambda x: x[1], reverse=True)
+                default_delim = sorted_delimiters[0][0] if sorted_delimiters[0][1] > 0 else ';'
+                
+                delimiter = st.selectbox(
+                    "Delimitador de colunas:",
+                    options=[',', ';', '\t', '|'],
+                    format_func=lambda x: {
+                        ',': 'Vírgula (,)',
+                        ';': 'Ponto e vírgula (;)', 
+                        '\t': 'Tabulação (\\t)',
+                        '|': 'Pipe (|)'
+                    }[x],
+                    index=[',', ';', '\t', '|'].index(default_delim)
+                )
+            except:
+                delimiter = ';'  # Fallback seguro
+        
+        with col2:
+            encoding = st.selectbox(
+                "Codificação do arquivo:",
+                options=['latin1', 'iso-8859-1', 'cp1252', 'utf-8'],  # Latin1 primeiro
+                index=0
+            )
+        
+        # Pré-visualização do conteúdo bruto com a codificação selecionada
+        try:
+            uploaded.seek(0)
+            raw_text = uploaded.getvalue().decode(encoding)
+            first_lines = raw_text.split('\n')[:5]
+            
+            with st.expander("🔍 Visualizar conteúdo bruto do arquivo (primeiras 5 linhas)"):
+                st.code("\n".join(first_lines))
+        except Exception as e:
+            st.error(f"❌ Falha ao ler conteúdo bruto: {str(e)}")
+            return None
+        
+        # Opção para tratar cabeçalho
+        has_header = st.checkbox("O arquivo possui linha de cabeçalho", value=True)
+        
+        # Pré-visualização com configurações atuais
+        st.markdown("#### Prévia com configurações atuais")
+        try:
+            uploaded.seek(0)
+            df_preview = pd.read_csv(
+                uploaded,
+                delimiter=delimiter,
+                decimal=',',
+                thousands='.',
+                encoding=encoding,  # Usando a codificação selecionada
+                header=0 if has_header else None,
+                nrows=5,
+                engine='python'  # Engine mais tolerante
+            )
+            
+            # Ajuste especial para cabeçalhos deslocados
+            if has_header and any(col.startswith('Unnamed:') for col in df_preview.columns):
+                st.warning("⚠️ Possível desalinhamento de colunas detectado!")
+                df_preview = pd.read_csv(
+                    uploaded,
+                    delimiter=delimiter,
+                    decimal=',',
+                    thousands='.',
+                    encoding=encoding,
+                    header=None,
+                    nrows=5,
+                    engine='python'
+                )
+                st.dataframe(df_preview)
+                st.warning("Sugestão: Desmarque 'possui linha de cabeçalho' se a primeira linha não for cabeçalho real")
+            else:
+                st.dataframe(df_preview)
+            
+            if df_preview.shape[1] == 1:
+                st.warning("⚠️ Apenas 1 coluna detectada. Verifique o delimitador!")
+            if any(str(col).startswith('Unnamed') for col in df_preview.columns):
+                st.warning("⚠️ Colunas sem nome detectadas. Verifique cabeçalhos.")
+                
+        except Exception as e:
+            st.error(f"❌ Falha na pré-visualização: {str(e)}")
+            return None
+        
+        # Botão para carregar definitivamente
+        if st.button("📤 Carregar arquivo CSV com estas configurações"):
+            try:
+                uploaded.seek(0)
+                df_original = pd.read_csv(
+                    uploaded,
+                    delimiter=delimiter,
+                    decimal=',',
+                    thousands='.',
+                    encoding=encoding,
+                    header=0 if has_header else None,
+                    engine='python'
+                )
+                
+                # Correção pós-carregamento para colunas Unnamed
+                df_original.columns = [f"col_{i}" if str(col).startswith('Unnamed') else col 
+                                     for i, col in enumerate(df_original.columns)]
+                
+                # Armazena no estado da sessão
+                st.session_state['df_original'] = df_original
+                st.session_state['df_loaded'] = True
+                st.session_state['file_config'] = {
+                    'delimiter': delimiter,
+                    'encoding': encoding,
+                    'has_header': has_header
+                }
+                
+                st.success("✅ Arquivo carregado com sucesso!")
+                return df_original
+                
             except Exception as e:
-                st.error(f"Erro ao ler a aba '{selected_sheet_name}': {e}")
-    return df_original
+                st.error(f"❌ Erro ao carregar: {str(e)}")
+                return None
+            
+    elif uploaded.name.endswith('.xlsx'):
+        try:
+            xls = pd.ExcelFile(uploaded)
+            st.markdown("#### Abas encontradas no arquivo:")
+            for name in xls.sheet_names:
+                st.write(f"- {name}")
+            
+            selected_sheet_name = st.selectbox(
+                "Selecione a aba do Excel para carregar", 
+                xls.sheet_names, 
+                key="excel_sheet_selector"
+            )
+            
+            # PRÉ-VISUALIZAÇÃO DA ABA SELECIONADA
+            st.markdown("#### Pré-visualização da aba selecionada")
+            
+            # Lê apenas as primeiras 5 linhas para preview
+            df_preview = pd.read_excel(xls, sheet_name=selected_sheet_name, nrows=5)
+            st.dataframe(df_preview)
+            
+            # Verifica problemas comuns
+            if df_preview.empty:
+                st.warning("⚠️ A aba selecionada está vazia!")
+            if df_preview.columns.duplicated().any():
+                st.warning("⚠️ Existem colunas duplicadas no cabeçalho!")
+            
+            # Botão para carregar definitivamente
+            if st.button("📤 Carregar aba selecionada"):
+                df_original = pd.read_excel(xls, sheet_name=selected_sheet_name)
+                
+                # Armazena no estado da sessão
+                st.session_state['df_original'] = df_original
+                st.session_state['df_loaded'] = True
+                st.session_state['file_config'] = {
+                    'sheet_name': selected_sheet_name
+                }
+                
+                st.success(f"✅ Aba '{selected_sheet_name}' carregada com sucesso!")
+                return df_original
+        
+        except Exception as e:
+            st.error(f"❌ Erro ao ler arquivo Excel: {str(e)}")
+            return None
 
 def prepare_data(df_original, x_cols, y_col):
     cols_to_check = x_cols + [y_col]
@@ -1567,6 +1705,8 @@ def initialize_session_state():
         st.session_state['preprocessor'] = None    
     if 'label_encoder' not in st.session_state:
         st.session_state['label_encoder'] = None
+    if 'modelos_configurados' not in st.session_state:
+        st.session_state['modelos_configurados'] = False
 
 # =============================================
 # Função principal
@@ -1575,10 +1715,11 @@ def main():
     setup_page()
     initialize_session_state()
     
-    # ----- 1. Carregamento e Análise dos Dados -----
-    st.markdown("## 1. Carregamento e Análise dos Dados")
-    uploaded = st.file_uploader("Carregue seu dataset (CSV ou Excel), este arquivo único deverá conter todos os dados (treino e teste) e incluir a coluna alvo.", type=['csv', 'xlsx'])
+    # ----- 1. Carregamento de Dados -----
+    st.markdown("## 1. Carregamento de Dados")
+    uploaded = st.file_uploader("Carregue seu dataset (CSV ou Excel)", type=['csv', 'xlsx'])
     
+    # [Seu código existente de carregamento de dados...]
     if uploaded:
         if uploaded.name != st.session_state['uploaded_file_name']:
             st.session_state['uploaded_file_name'] = uploaded.name
@@ -1594,7 +1735,7 @@ def main():
             st.session_state['excel_sheet_name'] = None 
             st.session_state['excel_header_row'] = 0
             st.session_state['label_encoder'] = None
-            st.rerun() 
+            st.rerun()
 
         df_original = load_data(uploaded)
         if df_original is not None:
@@ -1611,57 +1752,56 @@ def main():
     st.markdown("---")
     st.markdown("## 2. Seleção da Variável Alvo")
     
-    # Obter todas as colunas
     all_cols = st.session_state['df_original'].columns.tolist()
     
-    # Seleção da variável alvo
-    default_y_col = st.session_state.get('y_col', None)
-    if default_y_col not in all_cols:
-        default_y_col = None
-    
+    # Modificação crucial: Removemos a pré-seleção automática
     y_col_current = st.selectbox(
         "Selecione a variável alvo (y)", 
-        all_cols, 
-        index=all_cols.index(default_y_col) if default_y_col in all_cols else 0, 
+        [""] + all_cols,  # Adicionamos opção vazia no início
+        index=0,  # Sempre começa vazio
         key="y_col_selector"
     )
     
-    # Atualizar sessão se houve mudança na variável alvo
-    if y_col_current != st.session_state['y_col']:
-        st.session_state['y_col'] = y_col_current
-        st.session_state['data_preprocessed'] = False 
-        st.session_state['label_encoder'] = None
-        st.session_state['interest_classes_selected'] = []
-        st.rerun()
-    
-    # Detectar tipo de problema
-    if st.session_state['y_col']:
+    # Só continua se uma variável for selecionada (não vazia)
+    if y_col_current:
+        if y_col_current != st.session_state.get('y_col'):
+            st.session_state.update({
+                'y_col': y_col_current,
+                'data_preprocessed': False,
+                'label_encoder': None,
+                'interest_classes_selected': []
+            })
+            st.rerun()
+        
+        # Detecção do tipo de problema
         y_data = st.session_state['df_original'][st.session_state['y_col']]
-        # Debug: Verifique o tipo e conteúdo
-        st.write(f"Tipo da coluna: {y_data.dtype}")
-        st.write(f"Tipo do primeiro valor: {type(y_data.iloc[0])}")
-        st.write(f"Exemplo de valores: {y_data.head().values}")
         problem_type = detect_problem_type(y_data)
         st.session_state['problem_type'] = problem_type
-        st.info(f"🔍 Tipo de problema detectado automaticamente: {'Classificação' if problem_type == 'classification' else 'Regressão'}")
+        st.info(f"🔍 Tipo de problema detectado: {'Classificação' if problem_type == 'classification' else 'Regressão'}")
     
-    # ----- 3. Análise Exploratória Automática -----
-    st.markdown("---")
-    st.markdown("## 3. Análise Exploratória Automática")
-    
-    # Excluir a variável alvo das colunas para análise
-    cols_for_analysis = [col for col in st.session_state['df_original'].columns if col != st.session_state['y_col']]
-    
-    if cols_for_analysis:
-        with st.spinner("Gerando análises exploratórias..."):
-            perform_eda(st.session_state['df_original'][cols_for_analysis])
-    else:
-        st.info("Não há colunas disponíveis para análise exploratória além da variável alvo.")
-    
+        # ----- 3. Análise Exploratória (SÓ APÓS CONFIRMAÇÃO) -----
+        if st.button("Confirmar variável alvo e gerar análise exploratória automática"):
+            st.session_state['y_col_confirmed'] = True
+            st.success("Variável alvo confirmada! Gerando análises...")
+            st.rerun()
         
+        if st.session_state.get('y_col_confirmed'):
+            st.markdown("---")
+            st.markdown("## 3. Análise Exploratória Automática")
+            
+            cols_for_analysis = [col for col in st.session_state['df_original'].columns 
+                               if col != st.session_state['y_col']]
+            
+            if cols_for_analysis:
+                with st.spinner("Gerando análises exploratórias..."):
+                    perform_eda(st.session_state['df_original'][cols_for_analysis])
+            else:
+                st.info("Não há colunas disponíveis para análise além da variável alvo.")
+    
     # ----- 4. Seleção de Variáveis Preditoras -----
-    st.markdown("---")
-    st.markdown("## 4. Seleção de Variáveis Preditoras")
+    if st.session_state.get('y_col_confirmed'):
+        st.markdown("---")
+        st.markdown("## 4. Seleção de Variáveis Preditoras")
 
     # Obter colunas disponíveis (excluindo a variável alvo)
     available_cols = [col for col in st.session_state['df_original'].columns 
@@ -1824,494 +1964,499 @@ def main():
             st.info("Selecione a variável alvo (y) na etapa anterior para configurar as classes.")
 
     # ----- 6. Escolha de Modelos e Hiperparâmetros -----
-    st.markdown("---")
-    st.markdown("## 6. Escolha de Modelos e Hiperparâmetros")
     
-    modelos_disponiveis = {
-        "classification": {
-            "SGDClassifier": SGDClassifier(random_state=42),
-            "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
-            "DecisionTreeClassifier": DecisionTreeClassifier(random_state=42),
-            "RandomForestClassifier": RandomForestClassifier(random_state=42), 
-            "GradientBoostingClassifier": GradientBoostingClassifier(random_state=42),
-            "XGBClassifier": XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42),
-            "SVC": SVC(probability=True, random_state=42),
-            "KNeighborsClassifier": KNeighborsClassifier(),
-            "GaussianNB": GaussianNB(),
-            "LGBMClassifier": lgb.LGBMClassifier(random_state=42)},
-        "regression": {
-            "LinearRegression": LinearRegression(),
-            "DecisionTreeRegressor": DecisionTreeRegressor(random_state=42),
-            "RandomForestRegressor": RandomForestRegressor(random_state=42),
-            "GradientBoostingRegressor": GradientBoostingRegressor(random_state=42),
-            "XGBRegressor": XGBRegressor(random_state=42),
-            "SVR": SVR(),
-            "KNeighborsRegressor": KNeighborsRegressor(),
-            "LGBMRegressor": lgb.LGBMRegressor(random_state=42)
-        }
-    }
-
-    problem_type = st.session_state.get('problem_type', 'classification')
-    modelos_selecionados = st.multiselect(
-        f"Selecione os modelos que deseja testar ({'Regressão' if problem_type == 'regression' else 'Classificação'}):",
-        list(modelos_disponiveis[problem_type].keys()),
-        default=list(modelos_disponiveis[problem_type].keys())
-    )
-
-    st.markdown("#### Tipo de Otimização de Hiperparâmetros")
-    st.session_state['optimization_method'] = st.radio(
-        "Selecione o método de otimização de hiperparâmetros:",
-        ("GridSearchCV", "RandomizedSearchCV"),
-        key="optimization_method_selector"
-    )
-
-    if st.session_state['optimization_method'] == "RandomizedSearchCV":
-        n_iter = st.number_input(
-            "Número de iterações para RandomizedSearchCV:", 
-            min_value=5, 
-            value=st.session_state.get('n_iter_random', 20),
-            step=5, 
-            key="n_iter_random_input"
-        )
-        st.session_state['n_iter_random'] = n_iter
-
-    parametros_grid = {}
-
-    if st.session_state.get('problem_type') == 'classification':
-        with st.expander("🔧 Configurar Hiperparâmetros para Modelos de Classificação"):
-            st.session_state['cv_folds'] = st.number_input(
-                "Número de folds para validação cruzada:",
-                min_value=2,
-                max_value=10,
-                value=st.session_state['cv_folds'],
-                step=1,
-                key="cv_folds_classification"
-            )
-            
-            # Configurações de hiperparâmetros para cada modelo de classificação
-            if "SGDClassifier" in modelos_selecionados:
-                st.subheader("SGDClassifier")
-                parametros_grid["SGDClassifier"] = {
-                    'clf__loss': st.multiselect("Função de perda (loss)", ["hinge", "log_loss", "modified_huber", "squared_error"], default=["log_loss"], key="sgd_loss_grid"),
-                    'clf__alpha': st.multiselect("Parâmetro de regularização (alpha)", [0.00001, 0.0001, 0.001, 0.01, 0.1], default=[0.0001], key="sgd_alpha_grid"),
-                    'clf__penalty': st.multiselect("Penalidade (penalty)", ['l2', 'l1', 'elasticnet', None], default=['l2'], key="sgd_penalty_grid")
-                }
-
-            if "LogisticRegression" in modelos_selecionados:
-                st.subheader("LogisticRegression")
-                C_options = [0.01, 0.1, 1.0, 10.0, 100.0]
-                solver_options = ["lbfgs", "liblinear", "saga"]
-                penalty_options = ['l1', 'l2', 'elasticnet', None]
-                
-                selected_solvers = st.multiselect("Solver", solver_options, default=["lbfgs"], key="lr_solver_grid")
-                
-                valid_penalties = []
-                if 'liblinear' in selected_solvers or 'saga' in selected_solvers:
-                    valid_penalties.extend(['l1', 'l2', 'elasticnet'])
-                if 'lbfgs' in selected_solvers:
-                    valid_penalties.append('l2')
-                if not selected_solvers:
-                    valid_penalties = ['l1', 'l2', 'elasticnet', None]
-                valid_penalties = list(set(valid_penalties))
-                if 'lbfgs' in selected_solvers and None not in valid_penalties:
-                    valid_penalties.append(None)
-                
-                parametros_grid["LogisticRegression"] = {
-                    'clf__C': st.multiselect("Inverso da regularização (C)", C_options, default=[1.0], key="lr_c_grid"),
-                    'clf__solver': selected_solvers,
-                    'clf__penalty': st.multiselect("Penalidade (penalty)", penalty_options, default=['l2'], key="lr_penalty_grid")
-                }
-
-            if "DecisionTreeClassifier" in modelos_selecionados:
-                st.subheader("DecisionTreeClassifier")
-                parametros_grid["DecisionTreeClassifier"] = {
-                    'clf__max_depth': st.multiselect("Profundidade máxima (max_depth)", [3, 5, 7, 10, None], default=[5], key="dt_depth_grid"),
-                    'clf__min_samples_split': st.multiselect("Mínimo de amostras para split", [2, 5, 10, 20], default=[2], key="dt_split_grid"),
-                    'clf__criterion': st.multiselect("Critério de divisão (criterion)", ["gini", "entropy"], default=["gini"], key="dt_criterion_grid")
-                }
-
-            if "RandomForestClassifier" in modelos_selecionados:
-                st.subheader("RandomForestClassifier")
-                parametros_grid["RandomForestClassifier"] = {
-                    'clf__n_estimators': st.multiselect("Número de árvores (n_estimators)", [100, 200, 300, 500], default=[300], key="rf_est_grid"),
-                    'clf__max_features': st.multiselect("Número de features para split (max_features)", ['sqrt', 'log2', None], default=['sqrt'], key="rf_max_features_grid"),
-                    'clf__min_samples_leaf': st.multiselect("Mínimo de amostras por folha (min_samples_leaf)", [1, 2, 4], default=[1], key="rf_min_leaf_grid")
-                }
-
-            if "GradientBoostingClassifier" in modelos_selecionados:
-                st.subheader("GradientBoostingClassifier")
-                parametros_grid["GradientBoostingClassifier"] = {
-                    'clf__learning_rate': st.multiselect("Taxa de aprendizado (learning_rate)", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="gb_lr_grid"),
-                    'clf__n_estimators': st.multiselect("Número de estágios (n_estimators)", [100, 200, 300], default=[100], key="gb_est_grid"),
-                    'clf__max_depth': st.multiselect("Profundidade máxima por estimador (max_depth)", [3, 5, 7], default=[3], key="gb_depth_grid")
-                }
-            
-            if "XGBClassifier" in modelos_selecionados:
-                st.subheader("XGBClassifier")
-                parametros_grid["XGBClassifier"] = {
-                    'clf__learning_rate': st.multiselect("Taxa de aprendizado (learning_rate)", [0.01, 0.05, 0.1, 0.3], default=[0.1], key="xgb_lr_grid"),
-                    'clf__n_estimators': st.multiselect("Número de estágios (n_estimators)", [100, 200, 300, 500], default=[100], key="xgb_est_grid"),
-                    'clf__max_depth': st.multiselect("Profundidade máxima por estimador (max_depth)", [3, 5, 7, 9], default=[3], key="xgb_depth_grid"),
-                    'clf__colsample_bytree': st.multiselect("Subamostragem de colunas por árvore (colsample_bytree)", [0.6, 0.8, 1.0], default=[1.0], key="xgb_colsample_grid")
-                }
-
-            if "SVC" in modelos_selecionados:
-                st.subheader("SVC")
-                parametros_grid["SVC"] = {
-                    'clf__C': st.multiselect("Parâmetro de regularização (C)", [0.1, 1, 10, 100], default=[1], key="svc_c_grid"),
-                    'clf__kernel': st.multiselect("Tipo de kernel", ["linear", "rbf", "poly", "sigmoid"], default=["rbf"], key="svc_kernel_grid"),
-                    'clf__gamma': st.multiselect("Coeficiente do kernel (gamma)", ['scale', 'auto', 0.01, 0.1, 1], default=['scale'], key="svc_gamma_grid")
-                }
-            
-            if "KNeighborsClassifier" in modelos_selecionados:
-                st.subheader("KNeighborsClassifier")
-                parametros_grid["KNeighborsClassifier"] = {
-                    'clf__n_neighbors': st.multiselect("Número de vizinhos (n_neighbors)", [3, 5, 7, 9, 11], default=[5], key="knn_neighbors_grid"),
-                    'clf__weights': st.multiselect("Peso dos vizinhos (weights)", ["uniform", "distance"], default=["uniform"], key="knn_weights_grid"),
-                    'clf__metric': st.multiselect("Métrica de distância (metric)", ["euclidean", "manhattan"], default=["euclidean"], key="knn_metric_grid")
-                }
-            
-            if "GaussianNB" in modelos_selecionados:
-                st.subheader("GaussianNB")
-                parametros_grid["GaussianNB"] = {
-                    'clf__var_smoothing': st.multiselect("Suavização de variância (var_smoothing)", [1e-9, 1e-8, 1e-7, 1e-6], default=[1e-9], key="gnb_smoothing_grid")
-                }
-            
-            if "LGBMClassifier" in modelos_selecionados:
-                st.subheader("LGBMClassifier")
-                parametros_grid["LGBMClassifier"] = {
-                    'clf__n_estimators': st.multiselect("Número de estimadores", [100, 200, 300, 500], default=[100], key="lgbm_est_grid"),
-                    'clf__learning_rate': st.multiselect("Taxa de aprendizado", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="lgbm_lr_grid"),
-                    'clf__num_leaves': st.multiselect("Número máximo de folhas", [20, 31, 40, 50], default=[31], key="lgbm_leaves_grid"),
-                    'clf__max_depth': st.multiselect("Profundidade máxima da árvore", [5, 7, 10, -1], default=[-1], key="lgbm_depth_grid"),
-                }
-            
-    else:
-        with st.expander("🔧 Configurar Hiperparâmetros para Modelos de Regressão"):
-            st.session_state['cv_folds'] = st.number_input(
-                "Número de folds para validação cruzada:",
-                min_value=2,
-                max_value=10,
-                value=st.session_state['cv_folds'],
-                step=1,
-                key="cv_folds_regression"
-            )
-            
-            # Configurações de hiperparâmetros para modelos de regressão
-            if "LinearRegression" in modelos_selecionados:
-                st.subheader("LinearRegression")
-                parametros_grid["LinearRegression"] = {
-                    'clf__fit_intercept': st.multiselect("fit_intercept (LinearRegression)",[True, False],default=[True],key="lr_fit_intercept"),
-                    'clf__positive': st.multiselect("Restringir a coeficientes positivos (positive)",[True, False],default=[False],key="lr_positive"),
-                    'clf__copy_X': st.multiselect("Copiar dados X (copy_X)",[True, False],default=[True],key="lr_copy_X")
-                }
-
-            if "DecisionTreeRegressor" in modelos_selecionados:
-                st.subheader("DecisionTreeRegressor")
-                parametros_grid["DecisionTreeRegressor"] = {
-                    'clf__max_depth': st.multiselect("Profundidade máxima (DecisionTree)", [None, 3, 5, 7, 10, 15], default=[None], key="dt_max_depth"),
-                    'clf__min_samples_split': st.multiselect("min_samples_split (DecisionTree)", [2, 5, 10, 20], default=[2], key="dt_min_samples_split"),
-                    'clf__criterion': st.multiselect("Critério (DecisionTree)", ["squared_error", "friedman_mse", "absolute_error"], default=["squared_error"], key="dt_criterion")
-                }
-
-            if "RandomForestRegressor" in modelos_selecionados:
-                st.subheader("RandomForestRegressor")
-                parametros_grid["RandomForestRegressor"] = {
-                    'clf__n_estimators': st.multiselect("Número de árvores (RandomForest)",[50, 100, 200, 300],default=[100],key="rf_n_estimators"),
-                    'clf__max_features': st.multiselect("max_features (RandomForest)",["sqrt", "log2", None],  # Remova 'auto' e adicione None#
-                        default=["sqrt"],key="rf_max_features"),
-                    'clf__min_samples_leaf': st.multiselect("min_samples_leaf (RandomForest)",[1, 2, 4, 8],default=[1],key="rf_min_samples_leaf")
-                }
-
-            if "XGBRegressor" in modelos_selecionados:
-                st.subheader("XGBRegressor")
-                parametros_grid["XGBRegressor"] = {
-                    'clf__learning_rate': st.multiselect("Taxa de aprendizado (XGBoost)", [0.001, 0.01, 0.05, 0.1, 0.2], default=[0.1], key="xgb_learning_rate"),
-                    'clf__n_estimators': st.multiselect("n_estimators (XGBoost)", [50, 100, 200, 300], default=[100], key="xgb_n_estimators"),
-                    'clf__max_depth': st.multiselect("max_depth (XGBoost)", [3, 5, 7, 9, 12], default=[3], key="xgb_max_depth"),
-                    'clf__subsample': st.multiselect("subsample (XGBoost)", [0.6, 0.8, 1.0], default=[1.0], key="xgb_subsample")
-                }
-
-            if "SVR" in modelos_selecionados:
-                st.subheader("SVR")
-                parametros_grid["SVR"] = {
-                    'clf__C': st.multiselect("C (SVR)", [0.1, 1, 10, 100], default=[1], key="svr_c"),
-                    'clf__kernel': st.multiselect("kernel (SVR)", ["linear", "rbf", "poly"], default=["rbf"], key="svr_kernel"),
-                    'clf__epsilon': st.multiselect("epsilon (SVR)", [0.01, 0.1, 0.5, 1.0], default=[0.1], key="svr_epsilon")
-                }
-
-            if "KNeighborsRegressor" in modelos_selecionados:
-                st.subheader("KNeighborsRegressor")
-                parametros_grid["KNeighborsRegressor"] = {
-                    'clf__n_neighbors': st.multiselect("n_neighbors (KNN)", [3, 5, 7, 9, 11], default=[5], key="knn_n_neighbors"),
-                    'clf__weights': st.multiselect("weights (KNN)", ["uniform", "distance"], default=["uniform"], key="knn_weights"),
-                    'clf__p': st.multiselect("p (KNN - 1=Manhattan, 2=Euclidean)", [1, 2], default=[2], key="knn_p")
-                }
-
-            if "LGBMRegressor" in modelos_selecionados:
-                st.subheader("LGBMRegressor")
-                parametros_grid["LGBMRegressor"] = {
-                    'clf__num_leaves': st.multiselect("num_leaves (LightGBM)", [20, 31, 40, 50], default=[31], key="lgbm_num_leaves"),
-                    'clf__learning_rate': st.multiselect("learning_rate (LightGBM)", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="lgbm_learning_rate"),
-                    'clf__n_estimators': st.multiselect("n_estimators (LightGBM)", [50, 100, 200, 300], default=[100], key="lgbm_n_estimators"),
-                    'clf__min_child_samples': st.multiselect("min_child_samples (LightGBM)", [5, 10, 20, 30], default=[20], key="lgbm_min_child_samples")
-                }
-
-    st.session_state['modelos_selecionados'] = modelos_selecionados
-    st.session_state['parametros_grid'] = parametros_grid
-
-    # ----- 7. Treinamento e Avaliação dos Modelos -----
-    st.markdown("---")
-    st.markdown("## 7. Treinamento e Avaliação dos Modelos")
-
-    # Verifica se já existem resultados
-    resultados_existentes = st.session_state.get('resultados_classificacao') or st.session_state.get('resultados_regressao')
-
-    if not resultados_existentes:
-        if st.button("🚀 Iniciar Treinamento e Comparação", type="primary"):
-            df_trabalho = st.session_state.get('df_trabalho')
-            x_cols = st.session_state.get('x_cols')
-            y_col = st.session_state.get('y_col')
-            
-            if not (x_cols and y_col and df_trabalho is not None and not df_trabalho.empty):
-                st.error("❌ Por favor, selecione as colunas X e y antes de treinar.")
-                st.stop()
-            
-            problem_type = st.session_state.get('problem_type', 'classification')
-            
-            # Verificar se devemos usar os fatores
-            if st.session_state.get('use_factors', False) and 'factors_df' in st.session_state:
-                # Usar os fatores no lugar das variáveis numéricas
-                factors_df = st.session_state['factors_df']
-                
-                # Obter colunas categóricas selecionadas
-                selected_cat_cols = st.session_state.get('selected_cat_cols', [])
-                
-                # Combinar fatores com colunas categóricas selecionadas
-                X = pd.concat([
-                    factors_df,
-                    df_trabalho[selected_cat_cols]
-                ], axis=1)
-                
-                # Atualizar as colunas X para incluir apenas os fatores e colunas categóricas selecionadas
-                x_cols = list(factors_df.columns) + selected_cat_cols
-                
-                st.info(f"🔧 Utilizando {len(factors_df.columns)} fatores principais + {len(selected_cat_cols)} variáveis categóricas selecionadas para modelagem.")
-            else:
-                # Usar as variáveis originais
-                X = df_trabalho[x_cols]
-            
-            y = df_trabalho[y_col].values
-            
-            
-            if problem_type == 'regression':
-                st.info(f"🔧 Iniciando processo de regressão com {len(modelos_selecionados)} modelo(s)...")
-                
-                try: 
-                    resultados, X_test, y_test = train_regression_models(
-                        modelos_disponiveis,
-                        modelos_selecionados,
-                        parametros_grid,
-                        X, y,
-                        st.session_state['optimization_method'],
-                        st.session_state['n_iter_random'],
-                        st.session_state['cv_folds']
-                    )
-                    
-                    st.session_state['resultados_regressao'] = resultados
-                    st.session_state['X_test_reg'] = X_test
-                    st.session_state['y_test_reg'] = y_test
-                    st.rerun()
-                
-                except Exception as e:
-                    st.error(f"Erro no treinamento: {str(e)}")
-                    st.stop()
-            
-            else:  # Classification
-                st.info(f"🔧 Iniciando processo de classificação com {len(modelos_selecionados)} modelo(s)...")
-                
-                try:
-                    resultados, roc_curves, html_relatorio, X_test, y_test = train_classification_models(
-                        modelos_disponiveis,
-                        modelos_selecionados,
-                        parametros_grid,
-                        st.session_state['df_trabalho'][st.session_state['x_cols']],
-                        st.session_state['df_trabalho'][st.session_state['y_col']],
-                        st.session_state['optimization_method'],
-                        st.session_state['n_iter_random'],
-                        st.session_state['cv_folds'],
-                        st.session_state.get('interest_classes_selected', []),
-                        st.session_state['threshold_metric']
-                    )
-                    
-                    st.session_state['resultados_classificacao'] = resultados
-                    st.session_state['roc_curves_data'] = roc_curves
-                    st.session_state['html_relatorio_classificacao'] = html_relatorio
-                    st.session_state['X_test_cla'] = X_test
-                    st.session_state['y_test_cla'] = y_test
-                    st.rerun()
-                
-                except Exception as e:
-                    st.error(f"Erro no treinamento: {str(e)}")
-                    st.stop()
-
-    else:
-        st.info("✅ Modelos já foram treinados. Os resultados estão disponíveis abaixo.")
+    if st.session_state.get('data_preprocessed'):
+        st.markdown("---")
+        st.markdown("## 6. Escolha de Modelos e Hiperparâmetros")
         
-        if st.button("🔄 Recalcular Modelos", type="secondary"):
-            st.session_state['resultados_classificacao'] = None
-            st.session_state['resultados_regressao'] = None
-            st.rerun()
+        modelos_disponiveis = {
+            "classification": {
+                "SGDClassifier": SGDClassifier(random_state=42),
+                "LogisticRegression": LogisticRegression(max_iter=1000, random_state=42),
+                "DecisionTreeClassifier": DecisionTreeClassifier(random_state=42),
+                "RandomForestClassifier": RandomForestClassifier(random_state=42), 
+                "GradientBoostingClassifier": GradientBoostingClassifier(random_state=42),
+                "XGBClassifier": XGBClassifier(use_label_encoder=False, eval_metric='logloss', random_state=42),
+                "SVC": SVC(probability=True, random_state=42),
+                "KNeighborsClassifier": KNeighborsClassifier(),
+                "GaussianNB": GaussianNB(),
+                "LGBMClassifier": lgb.LGBMClassifier(random_state=42)},
+            "regression": {
+                "LinearRegression": LinearRegression(),
+                "DecisionTreeRegressor": DecisionTreeRegressor(random_state=42),
+                "RandomForestRegressor": RandomForestRegressor(random_state=42),
+                "GradientBoostingRegressor": GradientBoostingRegressor(random_state=42),
+                "XGBRegressor": XGBRegressor(random_state=42),
+                "SVR": SVR(),
+                "KNeighborsRegressor": KNeighborsRegressor(),
+                "LGBMRegressor": lgb.LGBMRegressor(random_state=42)
+            }
+        }
 
-        # Exibição dos resultados (para ambos os casos - novos ou existentes)
-        if st.session_state.get('resultados_regressao'):
-            resultados = st.session_state['resultados_regressao']
-            X_test = st.session_state['X_test_reg']
-            y_test = st.session_state['y_test_reg']
-            
-            st.markdown("## 📊 Comparação entre Modelos de Regressão")
-            df_resultados = pd.DataFrame(resultados).sort_values('R²', ascending=False)
-            
-            # Criar colunas para os gráficos
-            col1, col2 = st.columns(2)
+        problem_type = st.session_state.get('problem_type', 'classification')
+        modelos_selecionados = st.multiselect(
+            f"Selecione os modelos que deseja testar ({'Regressão' if problem_type == 'regression' else 'Classificação'}):",
+            list(modelos_disponiveis[problem_type].keys()),
+            default=list(modelos_disponiveis[problem_type].keys())
+        )
 
-            # Gráfico na primeira coluna
-            with col1:
-                st.markdown("#### Comparação de R²")
-                fig_r2 = plot_metric_comparison(resultados, 'R²')
-                st.pyplot(fig_r2, use_container_width=True)
-                plt.close(fig_r2)
+        st.markdown("#### Tipo de Otimização de Hiperparâmetros")
+        st.session_state['optimization_method'] = st.radio(
+            "Selecione o método de otimização de hiperparâmetros:",
+            ("GridSearchCV", "RandomizedSearchCV"),
+            key="optimization_method_selector"
+        )
 
-            # Gráfico na segunda coluna
-            with col2:
-                st.markdown("#### Comparação de Erros")
-                fig_errors = plot_error_comparison(resultados, 'RMSE')
-                st.pyplot(fig_errors, use_container_width=True)
-                plt.close(fig_errors)
-
-            # Linha divisória
-            st.markdown("---")
-
-            # Título para a tabela
-            st.markdown("### Tabela Comparativa Detalhada")
-
-            # Tabela com os resultados
-            st.dataframe(
-                df_resultados[['Modelo', 'R²', 'RMSE', 'MAE', 'MSE']].style
-                    .format({'R²': '{:.4f}', 'RMSE': '{:.4f}', 'MAE': '{:.4f}', 'MSE': '{:.4f}'})
-                    .background_gradient(cmap='Blues', subset=['R²'])
-                    .highlight_max(subset=['R²'], color='lightgreen')
-                    .highlight_min(subset=['RMSE', 'MAE', 'MSE'], color='lightcoral')
-)
-            
-            st.markdown("## 📈 Visualizações Individuais por Modelo")
-            for i, resultado in enumerate(resultados):
-                if i % 2 == 0:
-                    cols = st.columns(2)
-                with cols[i % 2]:
-                    with st.expander(f"{resultado['Modelo']} - R² = {resultado['R²']:.4f}", expanded=False):
-                        st.pyplot(resultado['Gráfico'])
-                        st.write("Melhores parâmetros:", resultado['Melhores Params'])
-            
-            html_report = generate_regression_html_report(resultados, X_test, y_test)
-            st.session_state['html_relatorio_regressao'] = html_report
-            
-            st.markdown("### 📊 Relatório Completo")
-            st.download_button(
-                label="⬇️ Baixar Relatório HTML",
-                data=html_report,
-                file_name="relatorio_regressao.html",
-                mime="text/html"
+        if st.session_state['optimization_method'] == "RandomizedSearchCV":
+            n_iter = st.number_input(
+                "Número de iterações para RandomizedSearchCV:", 
+                min_value=5, 
+                value=st.session_state.get('n_iter_random', 20),
+                step=5, 
+                key="n_iter_random_input"
             )
-            
-            with st.expander("🔍 Visualizar Relatório HTML"):
-                components_html(html_report, height=1000, scrolling=True)
-            
-            melhor_modelo = df_resultados.loc[df_resultados['R²'].idxmax()]
-            st.success(f"🏆 Melhor modelo: {melhor_modelo['Modelo']} com R² = {melhor_modelo['R²']:.4f}")
-            
-            with st.spinner("Preparando o melhor modelo para download..."):
-                modelo_base = modelos_disponiveis['regression'][melhor_modelo['Modelo']]
-                href = download_link(
-                    modelo_base,
-                    'melhor_modelo_regressao.pkl',
-                    '⬇️ Baixar Melhor Modelo de Regressão'
+            st.session_state['n_iter_random'] = n_iter
+
+        parametros_grid = {}
+
+        if st.session_state.get('problem_type') == 'classification':
+            with st.expander("🔧 Configurar Hiperparâmetros para Modelos de Classificação"):
+                st.session_state['cv_folds'] = st.number_input(
+                    "Número de folds para validação cruzada:",
+                    min_value=2,
+                    max_value=10,
+                    value=st.session_state['cv_folds'],
+                    step=1,
+                    key="cv_folds_classification"
                 )
-                st.markdown(href, unsafe_allow_html=True)
+                
+                # Configurações de hiperparâmetros para cada modelo de classificação
+                if "SGDClassifier" in modelos_selecionados:
+                    st.subheader("SGDClassifier")
+                    parametros_grid["SGDClassifier"] = {
+                        'clf__loss': st.multiselect("Função de perda (loss)", ["hinge", "log_loss", "modified_huber", "squared_error"], default=["log_loss"], key="sgd_loss_grid"),
+                        'clf__alpha': st.multiselect("Parâmetro de regularização (alpha)", [0.00001, 0.0001, 0.001, 0.01, 0.1], default=[0.0001], key="sgd_alpha_grid"),
+                        'clf__penalty': st.multiselect("Penalidade (penalty)", ['l2', 'l1', 'elasticnet', None], default=['l2'], key="sgd_penalty_grid")
+                    }
 
-        elif st.session_state.get('resultados_classificacao'):
-            resultados = st.session_state['resultados_classificacao']
-            roc_curves = st.session_state['roc_curves_data']
-            html_relatorio = st.session_state['html_relatorio_classificacao']
-            X_test = st.session_state['X_test_cla']
-            y_test = st.session_state['y_test_cla']
-            df_resultados = pd.DataFrame(resultados)
-            
-            st.markdown("## 📊 Resultados da Classificação")
-            
-            cols_para_exibir = ['Modelo', 'Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall', 'Optimal Threshold']
-            cols_presentes = [col for col in cols_para_exibir if col in df_resultados.columns]
-            
-            st.dataframe(
-                df_resultados[cols_presentes]
-                .sort_values('Acurácia', ascending=False)
-                .style
-                .format({col: '{:.4f}' for col in cols_presentes if col != 'Modelo'})
-                .background_gradient(cmap='Blues', subset=['Acurácia'])
-                .highlight_max(subset=['Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall'], color='lightgreen')
-                .highlight_min(subset=['Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall'], color='lightcoral')
-            )
-            
-            if roc_curves:
-                st.markdown("### Comparação de Curvas ROC")
-                fig_combined, ax_combined = plt.subplots(figsize=(10, 8))
-                for curve in roc_curves:
-                    roc_plot_label = f"{curve['model']} (AUC = {curve['auc']:.3f})"
-                    if curve['plot_type'] == 'custom_binary':
-                        int_lbls = ", ".join(map(str, curve['interest_classes'])) 
-                        comp_lbls = ", ".join(map(str, curve['complementary_classes'])) 
-                        roc_plot_label = f"{curve['model']} (AUC = {curve['auc']:.3f}) - Interesse: [{int_lbls}], Compl.: [{comp_lbls}]" 
-                    ax_combined.plot(curve['fpr'], curve['tpr'], lw=2, label=roc_plot_label)
+                if "LogisticRegression" in modelos_selecionados:
+                    st.subheader("LogisticRegression")
+                    C_options = [0.01, 0.1, 1.0, 10.0, 100.0]
+                    solver_options = ["lbfgs", "liblinear", "saga"]
+                    penalty_options = ['l1', 'l2', 'elasticnet', None]
+                    
+                    selected_solvers = st.multiselect("Solver", solver_options, default=["lbfgs"], key="lr_solver_grid")
+                    
+                    valid_penalties = []
+                    if 'liblinear' in selected_solvers or 'saga' in selected_solvers:
+                        valid_penalties.extend(['l1', 'l2', 'elasticnet'])
+                    if 'lbfgs' in selected_solvers:
+                        valid_penalties.append('l2')
+                    if not selected_solvers:
+                        valid_penalties = ['l1', 'l2', 'elasticnet', None]
+                    valid_penalties = list(set(valid_penalties))
+                    if 'lbfgs' in selected_solvers and None not in valid_penalties:
+                        valid_penalties.append(None)
+                    
+                    parametros_grid["LogisticRegression"] = {
+                        'clf__C': st.multiselect("Inverso da regularização (C)", C_options, default=[1.0], key="lr_c_grid"),
+                        'clf__solver': selected_solvers,
+                        'clf__penalty': st.multiselect("Penalidade (penalty)", penalty_options, default=['l2'], key="lr_penalty_grid")
+                    }
+
+                if "DecisionTreeClassifier" in modelos_selecionados:
+                    st.subheader("DecisionTreeClassifier")
+                    parametros_grid["DecisionTreeClassifier"] = {
+                        'clf__max_depth': st.multiselect("Profundidade máxima (max_depth)", [3, 5, 7, 10, None], default=[5], key="dt_depth_grid"),
+                        'clf__min_samples_split': st.multiselect("Mínimo de amostras para split", [2, 5, 10, 20], default=[2], key="dt_split_grid"),
+                        'clf__criterion': st.multiselect("Critério de divisão (criterion)", ["gini", "entropy"], default=["gini"], key="dt_criterion_grid")
+                    }
+
+                if "RandomForestClassifier" in modelos_selecionados:
+                    st.subheader("RandomForestClassifier")
+                    parametros_grid["RandomForestClassifier"] = {
+                        'clf__n_estimators': st.multiselect("Número de árvores (n_estimators)", [100, 200, 300, 500], default=[300], key="rf_est_grid"),
+                        'clf__max_features': st.multiselect("Número de features para split (max_features)", ['sqrt', 'log2', None], default=['sqrt'], key="rf_max_features_grid"),
+                        'clf__min_samples_leaf': st.multiselect("Mínimo de amostras por folha (min_samples_leaf)", [1, 2, 4], default=[1], key="rf_min_leaf_grid")
+                    }
+
+                if "GradientBoostingClassifier" in modelos_selecionados:
+                    st.subheader("GradientBoostingClassifier")
+                    parametros_grid["GradientBoostingClassifier"] = {
+                        'clf__learning_rate': st.multiselect("Taxa de aprendizado (learning_rate)", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="gb_lr_grid"),
+                        'clf__n_estimators': st.multiselect("Número de estágios (n_estimators)", [100, 200, 300], default=[100], key="gb_est_grid"),
+                        'clf__max_depth': st.multiselect("Profundidade máxima por estimador (max_depth)", [3, 5, 7], default=[3], key="gb_depth_grid")
+                    }
                 
-                ax_combined.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Chance')
-                ax_combined.set_xlim([0.0, 1.0])
-                ax_combined.set_ylim([0.0, 1.05])
-                ax_combined.set_xlabel('Taxa de Falsos Positivos')
-                ax_combined.set_ylabel('Taxa de Verdadeiros Positivos')
-                ax_combined.set_title('Comparação de Curvas ROC dos Modelos')
-                ax_combined.legend(loc='lower right', fontsize='small') 
-                plt.tight_layout() 
-                ax_combined.grid(alpha=0.3)
-                # Dividir em duas colunas no Streamlit
+                if "XGBClassifier" in modelos_selecionados:
+                    st.subheader("XGBClassifier")
+                    parametros_grid["XGBClassifier"] = {
+                        'clf__learning_rate': st.multiselect("Taxa de aprendizado (learning_rate)", [0.01, 0.05, 0.1, 0.3], default=[0.1], key="xgb_lr_grid"),
+                        'clf__n_estimators': st.multiselect("Número de estágios (n_estimators)", [100, 200, 300, 500], default=[100], key="xgb_est_grid"),
+                        'clf__max_depth': st.multiselect("Profundidade máxima por estimador (max_depth)", [3, 5, 7, 9], default=[3], key="xgb_depth_grid"),
+                        'clf__colsample_bytree': st.multiselect("Subamostragem de colunas por árvore (colsample_bytree)", [0.6, 0.8, 1.0], default=[1.0], key="xgb_colsample_grid")
+                    }
+
+                if "SVC" in modelos_selecionados:
+                    st.subheader("SVC")
+                    parametros_grid["SVC"] = {
+                        'clf__C': st.multiselect("Parâmetro de regularização (C)", [0.1, 1, 10, 100], default=[1], key="svc_c_grid"),
+                        'clf__kernel': st.multiselect("Tipo de kernel", ["linear", "rbf", "poly", "sigmoid"], default=["rbf"], key="svc_kernel_grid"),
+                        'clf__gamma': st.multiselect("Coeficiente do kernel (gamma)", ['scale', 'auto', 0.01, 0.1, 1], default=['scale'], key="svc_gamma_grid")
+                    }
+                
+                if "KNeighborsClassifier" in modelos_selecionados:
+                    st.subheader("KNeighborsClassifier")
+                    parametros_grid["KNeighborsClassifier"] = {
+                        'clf__n_neighbors': st.multiselect("Número de vizinhos (n_neighbors)", [3, 5, 7, 9, 11], default=[5], key="knn_neighbors_grid"),
+                        'clf__weights': st.multiselect("Peso dos vizinhos (weights)", ["uniform", "distance"], default=["uniform"], key="knn_weights_grid"),
+                        'clf__metric': st.multiselect("Métrica de distância (metric)", ["euclidean", "manhattan"], default=["euclidean"], key="knn_metric_grid")
+                    }
+                
+                if "GaussianNB" in modelos_selecionados:
+                    st.subheader("GaussianNB")
+                    parametros_grid["GaussianNB"] = {
+                        'clf__var_smoothing': st.multiselect("Suavização de variância (var_smoothing)", [1e-9, 1e-8, 1e-7, 1e-6], default=[1e-9], key="gnb_smoothing_grid")
+                    }
+                
+                if "LGBMClassifier" in modelos_selecionados:
+                    st.subheader("LGBMClassifier")
+                    parametros_grid["LGBMClassifier"] = {
+                        'clf__n_estimators': st.multiselect("Número de estimadores", [100, 200, 300, 500], default=[100], key="lgbm_est_grid"),
+                        'clf__learning_rate': st.multiselect("Taxa de aprendizado", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="lgbm_lr_grid"),
+                        'clf__num_leaves': st.multiselect("Número máximo de folhas", [20, 31, 40, 50], default=[31], key="lgbm_leaves_grid"),
+                        'clf__max_depth': st.multiselect("Profundidade máxima da árvore", [5, 7, 10, -1], default=[-1], key="lgbm_depth_grid"),
+                    }
+                
+        else:
+            with st.expander("🔧 Configurar Hiperparâmetros para Modelos de Regressão"):
+                st.session_state['cv_folds'] = st.number_input(
+                    "Número de folds para validação cruzada:",
+                    min_value=2,
+                    max_value=10,
+                    value=st.session_state['cv_folds'],
+                    step=1,
+                    key="cv_folds_regression"
+                )
+                
+                # Configurações de hiperparâmetros para modelos de regressão
+                if "LinearRegression" in modelos_selecionados:
+                    st.subheader("LinearRegression")
+                    parametros_grid["LinearRegression"] = {
+                        'clf__fit_intercept': st.multiselect("fit_intercept (LinearRegression)",[True, False],default=[True],key="lr_fit_intercept"),
+                        'clf__positive': st.multiselect("Restringir a coeficientes positivos (positive)",[True, False],default=[False],key="lr_positive"),
+                        'clf__copy_X': st.multiselect("Copiar dados X (copy_X)",[True, False],default=[True],key="lr_copy_X")
+                    }
+
+                if "DecisionTreeRegressor" in modelos_selecionados:
+                    st.subheader("DecisionTreeRegressor")
+                    parametros_grid["DecisionTreeRegressor"] = {
+                        'clf__max_depth': st.multiselect("Profundidade máxima (DecisionTree)", [None, 3, 5, 7, 10, 15], default=[None], key="dt_max_depth"),
+                        'clf__min_samples_split': st.multiselect("min_samples_split (DecisionTree)", [2, 5, 10, 20], default=[2], key="dt_min_samples_split"),
+                        'clf__criterion': st.multiselect("Critério (DecisionTree)", ["squared_error", "friedman_mse", "absolute_error"], default=["squared_error"], key="dt_criterion")
+                    }
+
+                if "RandomForestRegressor" in modelos_selecionados:
+                    st.subheader("RandomForestRegressor")
+                    parametros_grid["RandomForestRegressor"] = {
+                        'clf__n_estimators': st.multiselect("Número de árvores (RandomForest)",[50, 100, 200, 300],default=[100],key="rf_n_estimators"),
+                        'clf__max_features': st.multiselect("max_features (RandomForest)",["sqrt", "log2", None],  # Remova 'auto' e adicione None#
+                            default=["sqrt"],key="rf_max_features"),
+                        'clf__min_samples_leaf': st.multiselect("min_samples_leaf (RandomForest)",[1, 2, 4, 8],default=[1],key="rf_min_samples_leaf")
+                    }
+
+                if "XGBRegressor" in modelos_selecionados:
+                    st.subheader("XGBRegressor")
+                    parametros_grid["XGBRegressor"] = {
+                        'clf__learning_rate': st.multiselect("Taxa de aprendizado (XGBoost)", [0.001, 0.01, 0.05, 0.1, 0.2], default=[0.1], key="xgb_learning_rate"),
+                        'clf__n_estimators': st.multiselect("n_estimators (XGBoost)", [50, 100, 200, 300], default=[100], key="xgb_n_estimators"),
+                        'clf__max_depth': st.multiselect("max_depth (XGBoost)", [3, 5, 7, 9, 12], default=[3], key="xgb_max_depth"),
+                        'clf__subsample': st.multiselect("subsample (XGBoost)", [0.6, 0.8, 1.0], default=[1.0], key="xgb_subsample")
+                    }
+
+                if "SVR" in modelos_selecionados:
+                    st.subheader("SVR")
+                    parametros_grid["SVR"] = {
+                        'clf__C': st.multiselect("C (SVR)", [0.1, 1, 10, 100], default=[1], key="svr_c"),
+                        'clf__kernel': st.multiselect("kernel (SVR)", ["linear", "rbf", "poly"], default=["rbf"], key="svr_kernel"),
+                        'clf__epsilon': st.multiselect("epsilon (SVR)", [0.01, 0.1, 0.5, 1.0], default=[0.1], key="svr_epsilon")
+                    }
+
+                if "KNeighborsRegressor" in modelos_selecionados:
+                    st.subheader("KNeighborsRegressor")
+                    parametros_grid["KNeighborsRegressor"] = {
+                        'clf__n_neighbors': st.multiselect("n_neighbors (KNN)", [3, 5, 7, 9, 11], default=[5], key="knn_n_neighbors"),
+                        'clf__weights': st.multiselect("weights (KNN)", ["uniform", "distance"], default=["uniform"], key="knn_weights"),
+                        'clf__p': st.multiselect("p (KNN - 1=Manhattan, 2=Euclidean)", [1, 2], default=[2], key="knn_p")
+                    }
+
+                if "LGBMRegressor" in modelos_selecionados:
+                    st.subheader("LGBMRegressor")
+                    parametros_grid["LGBMRegressor"] = {
+                        'clf__num_leaves': st.multiselect("num_leaves (LightGBM)", [20, 31, 40, 50], default=[31], key="lgbm_num_leaves"),
+                        'clf__learning_rate': st.multiselect("learning_rate (LightGBM)", [0.01, 0.05, 0.1, 0.2], default=[0.1], key="lgbm_learning_rate"),
+                        'clf__n_estimators': st.multiselect("n_estimators (LightGBM)", [50, 100, 200, 300], default=[100], key="lgbm_n_estimators"),
+                        'clf__min_child_samples': st.multiselect("min_child_samples (LightGBM)", [5, 10, 20, 30], default=[20], key="lgbm_min_child_samples")
+                    }
+
+        st.session_state['modelos_selecionados'] = modelos_selecionados
+        st.session_state['parametros_grid'] = parametros_grid
+        st.session_state['modelos_configurados'] = True
+
+
+    if st.session_state.get('modelos_configurados'):
+        # ----- 7. Treinamento e Avaliação dos Modelos -----
+        st.markdown("---")
+        st.markdown("## 7. Treinamento e Avaliação dos Modelos")
+
+        # Verifica se já existem resultados
+        resultados_existentes = st.session_state.get('resultados_classificacao') or st.session_state.get('resultados_regressao')
+
+        if not resultados_existentes:
+            if st.button("🚀 Iniciar Treinamento e Comparação", type="primary"):
+                df_trabalho = st.session_state.get('df_trabalho')
+                x_cols = st.session_state.get('x_cols')
+                y_col = st.session_state.get('y_col')
+                
+                if not (x_cols and y_col and df_trabalho is not None and not df_trabalho.empty):
+                    st.error("❌ Por favor, selecione as colunas X e y antes de treinar.")
+                    st.stop()
+                
+                problem_type = st.session_state.get('problem_type', 'classification')
+                
+                # Verificar se devemos usar os fatores
+                if st.session_state.get('use_factors', False) and 'factors_df' in st.session_state:
+                    # Usar os fatores no lugar das variáveis numéricas
+                    factors_df = st.session_state['factors_df']
+                    
+                    # Obter colunas categóricas selecionadas
+                    selected_cat_cols = st.session_state.get('selected_cat_cols', [])
+                    
+                    # Combinar fatores com colunas categóricas selecionadas
+                    X = pd.concat([
+                        factors_df,
+                        df_trabalho[selected_cat_cols]
+                    ], axis=1)
+                    
+                    # Atualizar as colunas X para incluir apenas os fatores e colunas categóricas selecionadas
+                    x_cols = list(factors_df.columns) + selected_cat_cols
+                    
+                    st.info(f"🔧 Utilizando {len(factors_df.columns)} fatores principais + {len(selected_cat_cols)} variáveis categóricas selecionadas para modelagem.")
+                else:
+                    # Usar as variáveis originais
+                    X = df_trabalho[x_cols]
+                
+                y = df_trabalho[y_col].values
+                
+                
+                if problem_type == 'regression':
+                    st.info(f"🔧 Iniciando processo de regressão com {len(modelos_selecionados)} modelo(s)...")
+                    
+                    try: 
+                        resultados, X_test, y_test = train_regression_models(
+                            modelos_disponiveis,
+                            modelos_selecionados,
+                            parametros_grid,
+                            X, y,
+                            st.session_state['optimization_method'],
+                            st.session_state['n_iter_random'],
+                            st.session_state['cv_folds']
+                        )
+                        
+                        st.session_state['resultados_regressao'] = resultados
+                        st.session_state['X_test_reg'] = X_test
+                        st.session_state['y_test_reg'] = y_test
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Erro no treinamento: {str(e)}")
+                        st.stop()
+                
+                else:  # Classification
+                    st.info(f"🔧 Iniciando processo de classificação com {len(modelos_selecionados)} modelo(s)...")
+                    
+                    try:
+                        resultados, roc_curves, html_relatorio, X_test, y_test = train_classification_models(
+                            modelos_disponiveis,
+                            modelos_selecionados,
+                            parametros_grid,
+                            st.session_state['df_trabalho'][st.session_state['x_cols']],
+                            st.session_state['df_trabalho'][st.session_state['y_col']],
+                            st.session_state['optimization_method'],
+                            st.session_state['n_iter_random'],
+                            st.session_state['cv_folds'],
+                            st.session_state.get('interest_classes_selected', []),
+                            st.session_state['threshold_metric']
+                        )
+                        
+                        st.session_state['resultados_classificacao'] = resultados
+                        st.session_state['roc_curves_data'] = roc_curves
+                        st.session_state['html_relatorio_classificacao'] = html_relatorio
+                        st.session_state['X_test_cla'] = X_test
+                        st.session_state['y_test_cla'] = y_test
+                        st.rerun()
+                    
+                    except Exception as e:
+                        st.error(f"Erro no treinamento: {str(e)}")
+                        st.stop()
+
+        else:
+            st.info("✅ Modelos já foram treinados. Os resultados estão disponíveis abaixo.")
+            
+            if st.button("🔄 Recalcular Modelos", type="secondary"):
+                st.session_state['resultados_classificacao'] = None
+                st.session_state['resultados_regressao'] = None
+                st.rerun()
+
+            # Exibição dos resultados (para ambos os casos - novos ou existentes)
+            if st.session_state.get('resultados_regressao'):
+                resultados = st.session_state['resultados_regressao']
+                X_test = st.session_state['X_test_reg']
+                y_test = st.session_state['y_test_reg']
+                
+                st.markdown("## 📊 Comparação entre Modelos de Regressão")
+                df_resultados = pd.DataFrame(resultados).sort_values('R²', ascending=False)
+                
+                # Criar colunas para os gráficos
                 col1, col2 = st.columns(2)
-                # Exibir o gráfico em uma das colunas
+
+                # Gráfico na primeira coluna
                 with col1:
-                    st.pyplot(fig_combined)
-                plt.close(fig_combined)
-            
-            st.markdown("### 📊 Relatório Completo")
-            with st.expander("🔍 Visualizar Relatório HTML"):
-                components_html(html_relatorio, height=1000, scrolling=True)
+                    st.markdown("#### Comparação de R²")
+                    fig_r2 = plot_metric_comparison(resultados, 'R²')
+                    st.pyplot(fig_r2, use_container_width=True)
+                    plt.close(fig_r2)
+
+                # Gráfico na segunda coluna
+                with col2:
+                    st.markdown("#### Comparação de Erros")
+                    fig_errors = plot_error_comparison(resultados, 'RMSE')
+                    st.pyplot(fig_errors, use_container_width=True)
+                    plt.close(fig_errors)
+
+                # Linha divisória
+                st.markdown("---")
+
+                # Título para a tabela
+                st.markdown("### Tabela Comparativa Detalhada")
+
+                # Tabela com os resultados
+                st.dataframe(
+                    df_resultados[['Modelo', 'R²', 'RMSE', 'MAE', 'MSE']].style
+                        .format({'R²': '{:.4f}', 'RMSE': '{:.4f}', 'MAE': '{:.4f}', 'MSE': '{:.4f}'})
+                        .background_gradient(cmap='Blues', subset=['R²'])
+                        .highlight_max(subset=['R²'], color='lightgreen')
+                        .highlight_min(subset=['RMSE', 'MAE', 'MSE'], color='lightcoral')
+    )
                 
-            st.download_button(
-                label="⬇️ Baixar Relatório HTML",
-                data=html_relatorio,
-                file_name="relatorio_classificacao.html",
-                mime="text/html"
-            )
-            
-            if not df_resultados.empty:
-                melhor_modelo = df_resultados.loc[df_resultados['Acurácia'].idxmax()]
-                st.success(f"🏆 Melhor modelo: {melhor_modelo['Modelo']} com acurácia de {melhor_modelo['Acurácia']:.4f}")
+                st.markdown("## 📈 Visualizações Individuais por Modelo")
+                for i, resultado in enumerate(resultados):
+                    if i % 2 == 0:
+                        cols = st.columns(2)
+                    with cols[i % 2]:
+                        with st.expander(f"{resultado['Modelo']} - R² = {resultado['R²']:.4f}", expanded=False):
+                            st.pyplot(resultado['Gráfico'])
+                            st.write("Melhores parâmetros:", resultado['Melhores Params'])
+                
+                html_report = generate_regression_html_report(resultados, X_test, y_test)
+                st.session_state['html_relatorio_regressao'] = html_report
+                
+                st.markdown("### 📊 Relatório Completo")
+                st.download_button(
+                    label="⬇️ Baixar Relatório HTML",
+                    data=html_report,
+                    file_name="relatorio_regressao.html",
+                    mime="text/html"
+                )
+                
+                with st.expander("🔍 Visualizar Relatório HTML"):
+                    components_html(html_report, height=1000, scrolling=True)
+                
+                melhor_modelo = df_resultados.loc[df_resultados['R²'].idxmax()]
+                st.success(f"🏆 Melhor modelo: {melhor_modelo['Modelo']} com R² = {melhor_modelo['R²']:.4f}")
                 
                 with st.spinner("Preparando o melhor modelo para download..."):
-                    modelo_base = modelos_disponiveis['classification'][melhor_modelo['Modelo']]
+                    modelo_base = modelos_disponiveis['regression'][melhor_modelo['Modelo']]
                     href = download_link(
                         modelo_base,
-                        'melhor_modelo_classificacao.pkl',
-                        '⬇️ Baixar Melhor Modelo de Classificação'
+                        'melhor_modelo_regressao.pkl',
+                        '⬇️ Baixar Melhor Modelo de Regressão'
                     )
                     st.markdown(href, unsafe_allow_html=True)
+
+            elif st.session_state.get('resultados_classificacao'):
+                resultados = st.session_state['resultados_classificacao']
+                roc_curves = st.session_state['roc_curves_data']
+                html_relatorio = st.session_state['html_relatorio_classificacao']
+                X_test = st.session_state['X_test_cla']
+                y_test = st.session_state['y_test_cla']
+                df_resultados = pd.DataFrame(resultados)
+                
+                st.markdown("## 📊 Resultados da Classificação")
+                
+                cols_para_exibir = ['Modelo', 'Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall', 'Optimal Threshold']
+                cols_presentes = [col for col in cols_para_exibir if col in df_resultados.columns]
+                
+                st.dataframe(
+                    df_resultados[cols_presentes]
+                    .sort_values('Acurácia', ascending=False)
+                    .style
+                    .format({col: '{:.4f}' for col in cols_presentes if col != 'Modelo'})
+                    .background_gradient(cmap='Blues', subset=['Acurácia'])
+                    .highlight_max(subset=['Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall'], color='lightgreen')
+                    .highlight_min(subset=['Acurácia', 'AUC', 'PR-AUC', 'F1-Score', 'Precisão', 'Recall'], color='lightcoral')
+                )
+                
+                if roc_curves:
+                    st.markdown("### Comparação de Curvas ROC")
+                    fig_combined, ax_combined = plt.subplots(figsize=(10, 8))
+                    for curve in roc_curves:
+                        roc_plot_label = f"{curve['model']} (AUC = {curve['auc']:.3f})"
+                        if curve['plot_type'] == 'custom_binary':
+                            int_lbls = ", ".join(map(str, curve['interest_classes'])) 
+                            comp_lbls = ", ".join(map(str, curve['complementary_classes'])) 
+                            roc_plot_label = f"{curve['model']} (AUC = {curve['auc']:.3f}) - Interesse: [{int_lbls}], Compl.: [{comp_lbls}]" 
+                        ax_combined.plot(curve['fpr'], curve['tpr'], lw=2, label=roc_plot_label)
+                    
+                    ax_combined.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--', label='Chance')
+                    ax_combined.set_xlim([0.0, 1.0])
+                    ax_combined.set_ylim([0.0, 1.05])
+                    ax_combined.set_xlabel('Taxa de Falsos Positivos')
+                    ax_combined.set_ylabel('Taxa de Verdadeiros Positivos')
+                    ax_combined.set_title('Comparação de Curvas ROC dos Modelos')
+                    ax_combined.legend(loc='lower right', fontsize='small') 
+                    plt.tight_layout() 
+                    ax_combined.grid(alpha=0.3)
+                    # Dividir em duas colunas no Streamlit
+                    col1, col2 = st.columns(2)
+                    # Exibir o gráfico em uma das colunas
+                    with col1:
+                        st.pyplot(fig_combined)
+                    plt.close(fig_combined)
+                
+                st.markdown("### 📊 Relatório Completo")
+                with st.expander("🔍 Visualizar Relatório HTML"):
+                    components_html(html_relatorio, height=1000, scrolling=True)
+                    
+                st.download_button(
+                    label="⬇️ Baixar Relatório HTML",
+                    data=html_relatorio,
+                    file_name="relatorio_classificacao.html",
+                    mime="text/html"
+                )
+                
+                if not df_resultados.empty:
+                    melhor_modelo = df_resultados.loc[df_resultados['Acurácia'].idxmax()]
+                    st.success(f"🏆 Melhor modelo: {melhor_modelo['Modelo']} com acurácia de {melhor_modelo['Acurácia']:.4f}")
+                    
+                    with st.spinner("Preparando o melhor modelo para download..."):
+                        modelo_base = modelos_disponiveis['classification'][melhor_modelo['Modelo']]
+                        href = download_link(
+                            modelo_base,
+                            'melhor_modelo_classificacao.pkl',
+                            '⬇️ Baixar Melhor Modelo de Classificação'
+                        )
+                        st.markdown(href, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
